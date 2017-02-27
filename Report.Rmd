@@ -1,0 +1,151 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Apurv Priyam"
+date: "Feb 27, 2017"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+
+Devices such as Jawbone Up, Nike FuelBand, and Fitbit can now help collect a large amount of data about personal activity relatively inexpensively. Often this data is used to measure what kind of activity has been carried out. 
+
+This particular exercise works to quantify how well a particular activity has been carried out. With one class depicting right way to do that activity and other five classes representing the most commonly carried out mistakes. We will data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and or incorrectly in 4 different ways(5 classes in total). More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Understanding Data 
+
+The data set is really large in terms of the features available and are all numeric in nature given then that they are either accelerometer data or their derivatives.
+
+We also have some timestamps data and username and the last column represents the class variable. 
+We convert all data from accelerometers and non-time stamps/class variable to numeric form.
+
+```{r conversion}
+library(ggplot2)
+pml_training <- read.csv("~/Coursera/practical_machine_learning/pml-training.csv")
+pml_testing <- read.csv("~/Coursera/practical_machine_learning/pml-testing.csv")
+for(i in 7:159)
+{
+  pml_training[,i] <- as.numeric(pml_training[,i])
+}
+```
+
+Now that we have converted all data points to numeric, we have NA values for certain columns which we initally of character type and empty with no data points. 
+
+## Pre-Processing
+
+Given the number of features, the first step would be to clean the data. Not using PCA, because want to retain the nature of the original columns.  
+
+```{r totalvar}
+Total_var <- 0
+for(i in 8:159)
+{
+  Int_var <- var(pml_training[,i],na.rm = TRUE)
+  if(!is.na(Int_var))
+  {
+    Total_var <- Total_var + Int_var
+  }
+}
+```
+
+So as to weed out colmuns of data with out suficient variance in them, we compute the contribution of each column to variance. We simply sum up the variance in each column to get the Total Variance available(Assumed, that the columns are independent). 
+
+Now, compute the contribution of each variable to the Total Variance. If this variance is less 1%, we straight away reject these columns. 
+
+```{r varpercent}
+col_name <- colnames(pml_training)[8:159]
+var_col <- numeric(length(col_name))
+for(i in 8:159)
+{
+  var_col[(i-7)] <- (var(pml_training[,i],na.rm = TRUE)/(Total_var))*100
+}
+
+Var_Data <- data.frame(name=col_name,variance_percent=var_col)
+```
+
+We eliminate any variable with less than 1% of variance contribution to the total variance pool. 
+The total number of variables with contribution greater than 1%. We also remove any feature with NA value. 
+
+```{r reducedfeatures,, echo=FALSE}
+sum(Var_Data$variance_percent>0.01,na.rm = TRUE)
+```
+
+Thereby the relevant columns are : 
+
+```{r relevantcols, echo=FALSE}
+Var_Data$name[which(Var_Data$variance_percent>0.01)]
+Relevant_Col <- Var_Data$name[which(Var_Data$variance_percent>0.01)]
+```
+
+Now that we have weeded out low contributors. We can see if have high correlation ones among the 25 features left. 
+
+```{r pressure, echo=FALSE}
+New_Training <- pml_training[,colnames(pml_training) %in% Relevant_Col]
+New_Training$user_name <- pml_training$user_name
+New_Training$raw_timestamp_part_2 <- pml_training$raw_timestamp_part_2
+New_Training$classe <- pml_training$classe
+
+
+New_Testing <- pml_testing[,colnames(pml_testing) %in% Relevant_Col]
+New_Testing$user_name <- pml_testing$user_name
+New_Testing$raw_timestamp_part_2 <- pml_testing$raw_timestamp_part_2
+New_Testing$classe <- pml_testing$problem_id
+```
+
+## Modelling
+
+Found out that several of the 25 variables are actually variance themselves, also many of them have plenty of missing values because they might be variance for a certain frame of data over a period of time. Since, I plan to model using Random Forest (Bagging Tree), no need for feature selection. 
+
+All variance columns are also removed from the 25, leaving us with 12 features in total. An RF model was built using them and tested on the testing data set.
+
+```{r forest1, echo=FALSE}
+formula <- formula(factor(classe) ~ accel_arm_x+accel_arm_x+accel_arm_z+magnet_arm_x+magnet_arm_y+magnet_arm_z+magnet_dumbbell_x+magnet_dumbbell_y+magnet_dumbbell_z+accel_forearm_x+accel_forearm_y+accel_forearm_z+magnet_forearm_x+magnet_forearm_y+magnet_forearm_z)
+
+New_Training$magnet_dumbbell_z[is.na(New_Training$magnet_dumbbell_z)] <- median(New_Training$magnet_dumbbell_z,na.rm=TRUE)
+New_Training$magnet_forearm_y[is.na(New_Training$magnet_forearm_y)] <- median(New_Training$magnet_forearm_y,na.rm=TRUE)
+New_Training$magnet_forearm_z[is.na(New_Training$magnet_forearm_z)] <- median(New_Training$magnet_forearm_z,na.rm=TRUE)
+
+New_Testing$magnet_dumbbell_z[is.na(New_Testing$magnet_dumbbell_z)] <- median(New_Testing$magnet_dumbbell_z,na.rm=TRUE)
+New_Testing$magnet_forearm_y[is.na(New_Testing$magnet_forearm_y)] <- median(New_Testing$magnet_forearm_y,na.rm=TRUE)
+New_Testing$magnet_forearm_z[is.na(New_Testing$magnet_forearm_z)] <- median(New_Testing$magnet_forearm_z,na.rm=TRUE)
+```
+
+The performance was decent since the 20 questions based on the testing data set, all came out to be right. 
+
+```{r model}
+library(randomForest)
+library(caTools)
+
+smp_size <- floor(0.75 * nrow(New_Training))
+train_ind <- sample(seq_len(nrow(New_Training)), size = smp_size)
+train <- New_Training[train_ind, ]
+CV <- New_Training[-train_ind, ]
+
+Model <- randomForest(formula,data=train)
+pred_cv <- predict(Model,newdata=CV)
+table(pred_cv,CV$classe)
+```
+Largely, we are getting the classes right. The accuracy of class prediction is 
+
+```{r model2,echo=FALSE}
+Data <- as.data.frame(table(pred_cv,CV$classe))
+Accuracy <- sum(Data[Data$pred_cv==Data$Var2,"Freq"])/(sum(Data[,"Freq"]))
+Accuracy
+```
+## Appendix 
+
+The Plot of Different Accelerometer Data across X axix for the five classes. 
+
+```{r plots,echo=FALSE}
+library(ggplot2)
+ggplot(New_Training,aes(y = accel_arm_x, x = factor(classe))) + geom_boxplot(aes(fill=(classe))) +xlab("Classes") + ylab("Accelerometer X")
+
+ggplot(New_Training,aes(y = magnet_arm_x, x = factor(classe))) + geom_boxplot(aes(fill=(classe))) +xlab("Classes") + ylab("Magneto Accelerometer X")
+
+ggplot(New_Training,aes(y = magnet_dumbbell_x, x = factor(classe))) + geom_boxplot(aes(fill=(classe))) +xlab("Classes") + ylab("Magneto Dumbbell Accelerometer X")
+
+ggplot(New_Training,aes(y = accel_forearm_x, x = factor(classe))) + geom_boxplot(aes(fill=(classe))) +xlab("Classes") + ylab("Forearm Accelerometer X")
+```
